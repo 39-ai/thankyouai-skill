@@ -22,7 +22,7 @@ GET  /generations/{id}  → poll until status = "succeeded" | "failed"
 
 All requests require:
 - `Authorization: Bearer <api_key>`
-- `x-workspace-id: <workspace_id>` header (required for generation tasks)
+- `x-workspace-id: <workspace_id>` header — optional if the API key was created inside a workspace (key carries a default workspace); required only when overriding or if the key has no default workspace bound
 
 ---
 
