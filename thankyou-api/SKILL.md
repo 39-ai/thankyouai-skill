@@ -318,29 +318,44 @@ exponential backoff with 2–3 attempts is recommended.
 ## 7. Python Quick-Start
 
 ```python
+import os
 import time
 import requests
 
 BASE = "https://api.thankyouai.com/open/v1"
-HEADERS = {
-    "Authorization": "Bearer tk_YOUR_KEY",
-    "x-workspace-id": "YOUR_WORKSPACE_ID",
-    "Content-Type": "application/json",
-}
 
-def generate(model: str, input_params: dict) -> dict:
-    r = requests.post(f"{BASE}/generate", json={"model": model, "input": input_params}, headers=HEADERS)
+def _headers(workspace_id: str | None = None) -> dict:
+    h = {
+        "Authorization": f"Bearer {os.environ['TY_KEY']}",
+        "Content-Type": "application/json",
+    }
+    # x-workspace-id is optional if the API key has a default workspace
+    ws = workspace_id or os.environ.get("TY_WS")
+    if ws:
+        h["x-workspace-id"] = ws
+    return h
+
+def generate(model: str, input_params: dict, workspace_id: str | None = None) -> dict:
+    r = requests.post(
+        f"{BASE}/generate",
+        json={"model": model, "input": input_params},
+        headers=_headers(workspace_id),
+    )
     r.raise_for_status()
-    gen = r.json()
-    gen_id = gen["id"]
+    gen_id = r.json()["id"]
 
-    for _ in range(60):  # max 5 minutes
+    for _ in range(60):  # poll up to 5 minutes
         time.sleep(5)
-        r = requests.get(f"{BASE}/generations/{gen_id}", headers=HEADERS)
-        result = r.json()
+        result = requests.get(f"{BASE}/generations/{gen_id}", headers=_headers(workspace_id)).json()
         if result["status"] in ("succeeded", "failed", "cancelled"):
+            if result["status"] != "succeeded":
+                raise RuntimeError(result.get("error"))
             return result
     raise TimeoutError(f"Generation {gen_id} did not complete")
+
+# Usage:
+#   export TY_KEY="tk_..."
+#   export TY_WS="..."   # optional
 
 # Image
 result = generate("google/nano-banana/text-to-image", {
