@@ -56,7 +56,7 @@ Response includes `primary_fields` (shown by default) and `advanced_fields` with
 
 ### Image: nano-banana series
 
-**nano-banana (standard text-to-image)**
+**nano-banana (standard text-to-image)** — fast, basic parameter set
 ```bash
 curl -X POST "$TY_BASE/generate" \
   -H "Authorization: Bearer $TY_KEY" \
@@ -66,13 +66,13 @@ curl -X POST "$TY_BASE/generate" \
     "model": "google/nano-banana/text-to-image",
     "input": {
       "prompt": "A serene mountain lake at golden hour, photorealistic",
-      "aspect_ratio": "16:9",
-      "num_images": 1
+      "aspect_ratio": "16:9"
     }
   }'
 ```
+> Standard nano-banana only supports `prompt`, `aspect_ratio` (10 ratios), and `reference_assets`. It does **not** accept `image_size`, `num_images`, `seed`, or other advanced params.
 
-**nano-banana/pro (higher quality, supports seed)**
+**nano-banana/pro (premium with grounding)** — full parameter set
 ```bash
 curl -X POST "$TY_BASE/generate" \
   -H "Authorization: Bearer $TY_KEY" \
@@ -81,14 +81,19 @@ curl -X POST "$TY_BASE/generate" \
   -d '{
     "model": "google/nano-banana/pro/text-to-image",
     "input": {
-      "prompt": "Futuristic cityscape at night with neon lights",
-      "image_size": "1024x1024",
-      "seed": 42
+      "prompt": "The Eiffel Tower at sunset, photorealistic",
+      "aspect_ratio": "3:2",
+      "image_size": "2K",
+      "num_images": 2,
+      "seed": 777,
+      "output_format": "png",
+      "enable_web_search": true,
+      "safety_tolerance": "3"
     }
   }'
 ```
 
-**nano-banana/v2 (latest generation, supports seed)**
+**nano-banana/v2 (best quality, supports thinking)** — full parameter set
 ```bash
 curl -X POST "$TY_BASE/generate" \
   -H "Authorization: Bearer $TY_KEY" \
@@ -97,8 +102,15 @@ curl -X POST "$TY_BASE/generate" \
   -d '{
     "model": "google/nano-banana/v2/text-to-image",
     "input": {
-      "prompt": "Wise elderly scientist in a cozy laboratory",
-      "seed": 123
+      "prompt": "A majestic phoenix rising from ancient ruins, fantasy art",
+      "aspect_ratio": "16:9",
+      "image_size": "2K",
+      "num_images": 2,
+      "seed": 12345,
+      "output_format": "png",
+      "enable_web_search": false,
+      "thinking_level": "high",
+      "safety_tolerance": "3"
     }
   }'
 ```
@@ -380,6 +392,10 @@ print(result["output"][0]["url"])
 - **`x-workspace-id` is optional if** the API key was created inside a workspace (the key carries a default `workspace_id`). Pass the header explicitly only when you need to override the default or the key has no workspace bound — missing both raises `missing_workspace` 422.
 - **`reference_assets` auto-routes** to the edit/image-to-image model variant
 - **Reference image URLs must be public** — upload via `POST /files` for private assets
-- **`safety_tolerance` / `thinking_level`** may appear in model detail for some models but are not supported — omit them
+- **`safety_tolerance` must be a string** (`"1"`–`"6"`), not an integer. Integer values are rejected as `invalid_param:safety_tolerance`. The schema `options` is a string array and the validator enforces the type strictly.
+- **`thinking_level` is `nano-banana/v2` only.** Pro doesn't expose it — sending it on Pro raises `invalid_param:thinking_level`.
+- **Empty-string `prompt` is not caught at validation.** It enqueues but fails at the provider with `provider_failed`. Always ensure `prompt.strip() != ""` client-side.
+- **Standard `nano-banana` ≠ `pro`/`v2`.** The standard model has a smaller parameter set (no `image_size`, `num_images`, `seed`, `output_format`, etc.). Check `/models/detail` before assuming a field exists.
+- **`/models/detail` may occasionally return a stripped-down schema** (empty `advanced_fields`) during deployments or cache misses. If fields you expect are missing, retry the detail request after a few seconds.
 - **Output URLs are temporary** — download and store them; they may expire
 - **Poll at 3–10s intervals** — most image tasks complete in 15–60s, TTS in 5–15s
