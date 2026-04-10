@@ -1,10 +1,10 @@
 ---
 name: thankyou-api
-description: Guide for using the ThankYou Generation API — authentication, submitting image/audio/video generation tasks, polling results, uploading reference files, and handling errors. Use nano-banana (image) and fish-audio (TTS) as reference examples.
+description: Guide for using the ThankYou Generation API — authentication, submitting image/audio/video generation tasks, polling or receiving webhook callbacks, uploading reference files, and handling errors. Use nano-banana (image) and fish-audio (TTS) as reference examples.
 user-invokable: true
 args:
   - name: topic
-    description: Specific area to focus on (auth, generate, poll, files, errors, models) — optional
+    description: Specific area to focus on (auth, generate, poll, webhook, files, errors, models) — optional
     required: false
 ---
 
@@ -18,6 +18,7 @@ The ThankYou API is an async generation platform. The core flow is:
 ```
 POST /generate          → returns { id, status: "queued" }
 GET  /generations/{id}  → poll until status = "succeeded" | "failed"
+Webhook callback        → optional push when the task reaches a subscribed terminal event
 ```
 
 All requests require:
@@ -136,7 +137,7 @@ curl -X POST "$TY_BASE/generate" \
   }'
 ```
 > Reference image must be a **publicly accessible URL** (≥ a few KB). Use the
-> Files endpoint (section 5) to upload your own images.
+> Files endpoint (section 6) to upload your own images.
 
 ---
 
@@ -248,7 +249,88 @@ curl "$TY_BASE/generations?page=1&page_size=20" \
 
 ---
 
-## 5. Upload Reference Files — `POST /files`
+## 5. Webhook Mode — push terminal events instead of polling
+
+If you do not want to poll `GET /generations/{id}`, include a `webhook` object in
+`POST /generate`. ThankYou will POST the terminal event to your HTTPS endpoint.
+You can still poll as a fallback even when webhook delivery is enabled.
+
+**Create a generation with webhook delivery:**
+```bash
+curl -X POST "$TY_BASE/generate" \
+  -H "Authorization: Bearer $TY_KEY" \
+  -H "x-workspace-id: $TY_WS" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "google/nano-banana/text-to-image",
+    "input": {
+      "prompt": "A cinematic fox running through neon rain",
+      "aspect_ratio": "16:9"
+    },
+    "webhook": {
+      "url": "https://example.com/callback",
+      "events": ["generation.completed", "generation.failed"]
+    }
+  }'
+```
+
+**Webhook rules:**
+- `webhook.url` must be **HTTPS**
+- `webhook.events` may contain only:
+  - `generation.completed`
+  - `generation.failed`
+  - `generation.cancelled`
+- Webhooks are delivered only for terminal states, so they complement polling rather
+  than replacing the initial `POST /generate` response
+
+**Webhook request format:**
+```http
+POST https://example.com/callback
+X-ThankYou-Signature: sha256=<hmac>
+X-ThankYou-Timestamp: 1711526400
+Content-Type: application/json
+
+{
+  "event": "generation.completed",
+  "generation": {
+    "id": "gen_abc123",
+    "status": "succeeded",
+    "model": "google/nano-banana/text-to-image",
+    "output": [
+      { "url": "https://static.thankyouai.com/...", "mime_type": "image/png" }
+    ],
+    "error": null
+  }
+}
+```
+
+**Signature verification:**
+- Each API key has its own `webhook_secret`
+- Signature format: `sha256=HMAC_SHA256(webhook_secret, "{timestamp}.{raw_body}")`
+- Recommended replay protection: reject requests when `abs(now - timestamp) > 300s`
+
+**Python verification example:**
+```python
+import hashlib
+import hmac
+import time
+
+def verify_thankyou_webhook(raw_body: bytes, timestamp: str, signature: str, secret: str) -> bool:
+    if abs(time.time() - int(timestamp)) > 300:
+        return False
+    signed = f"{timestamp}.".encode("utf-8") + raw_body
+    expected = "sha256=" + hmac.new(secret.encode("utf-8"), signed, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, signature)
+```
+
+**Delivery semantics:**
+- Retry schedule: roughly **10s → 60s → 5min**
+- If all retries fail, fetch the final state manually with `GET /generations/{id}`
+- Your webhook handler should be idempotent and key off `generation.id`
+
+---
+
+## 6. Upload Reference Files — `POST /files`
 
 Use the two-step presigned PUT flow to upload images for use as reference_assets:
 
@@ -277,7 +359,7 @@ Now use `$FILE_URL` as the reference image URL in generation requests.
 
 ---
 
-## 6. Error Handling
+## 7. Error Handling
 
 The API uses two error surfaces:
 
@@ -327,7 +409,7 @@ exponential backoff with 2–3 attempts is recommended.
 
 ---
 
-## 7. Python Quick-Start
+## 8. Python Quick-Start
 
 ```python
 import os
@@ -399,3 +481,5 @@ print(result["output"][0]["url"])
 - **`/models/detail` may occasionally return a stripped-down schema** (empty `advanced_fields`) during deployments or cache misses. If fields you expect are missing, retry the detail request after a few seconds.
 - **Output URLs are temporary** — download and store them; they may expire
 - **Poll at 3–10s intervals** — most image tasks complete in 15–60s, TTS in 5–15s
+- **Webhook signatures must use the raw request body** — do not JSON re-serialize before verifying `X-ThankYou-Signature`
+- **Webhook handlers should be idempotent** — retries can deliver the same terminal event more than once
